@@ -42,11 +42,17 @@ commonly MPEG 1.0 Layer 3 aka MP3).
     --enable-modules=yes \
     --with-module-suffix=.so \
     --with-default-audio=pulse \
-%ifarch armv7hl
+%ifarch %{arm32}
     --with-cpu=arm_fpu \
 %endif
-%ifarch %{ix86} x86_64
-    --enable-yasm=yes \
+%ifarch %{ix86}
+    --with-cpu=x86 \
+%endif
+%ifarch x86_64
+    --with-cpu=x86-64 \
+%endif
+%ifarch %{arm64}
+    --with-cpu=aarch64 \
 %endif
 
 make %{?_smp_mflags}
