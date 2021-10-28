@@ -7,9 +7,6 @@ Group:          Productivity/Multimedia/Sound/Players
 Url:            http://www.mpg123.de/
 Source0:        https://sourceforge.net/projects/%{name}/files/%{name}/%{version}/%{name}-%{version}.tar.bz2
 BuildRequires:  pkgconfig(libpulse)
-%ifarch %{ix86} x86_64
-BuildRequires:  yasm
-%endif
 
 %description
 The mpg123 distribution contains an MPEG 1.0/2.0/2.5 audio player/decoder for
@@ -42,11 +39,17 @@ commonly MPEG 1.0 Layer 3 aka MP3).
     --enable-modules=yes \
     --with-module-suffix=.so \
     --with-default-audio=pulse \
-%ifarch armv7hl
+%ifarch %{arm32}
     --with-cpu=arm_fpu \
 %endif
-%ifarch %{ix86} x86_64
-    --enable-yasm=yes \
+%ifarch %{ix86}
+    --with-cpu=x86 \
+%endif
+%ifarch x86_64
+    --with-cpu=x86-64 \
+%endif
+%ifarch %{arm64}
+    --with-cpu=aarch64 \
 %endif
 
 make %{?_smp_mflags}
