@@ -1,5 +1,5 @@
 Name:           mpg123
-Version:        1.25.10
+Version:        1.29.2
 Release:        1
 Summary:        Console MPEG audio player and decoder library
 License:        LGPLv2
@@ -73,17 +73,20 @@ make %{?_smp_mflags}
 
 %files -n libmpg123
 %defattr(-,root,root)
-%doc COPYING
+%license COPYING
 %{_libdir}/libmpg123.so.*
 %{_libdir}/libout123.so.*
+%{_libdir}/libsyn123.so.*
 
 %files devel
 %defattr(-,root,root)
 %{_libdir}/libmpg123.so
 %{_libdir}/libout123.so
+%{_libdir}/libsyn123.so
 %{_libdir}/pkgconfig/libmpg123.pc
 %{_libdir}/pkgconfig/libout123.pc
+%{_libdir}/pkgconfig/libsyn123.pc
 %{_includedir}/fmt123.h
 %{_includedir}/mpg123.h
 %{_includedir}/out123.h
-
+%{_includedir}/syn123.h
