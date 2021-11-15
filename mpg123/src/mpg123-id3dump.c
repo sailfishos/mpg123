@@ -1,7 +1,7 @@
 /*
 	id3dump: Print ID3 tags of files, scanned using libmpg123.
 
-	copyright 2007 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright 2007-2021 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Thomas Orgis
 */
@@ -11,12 +11,16 @@
 #define _BSD_SOURCE
 #include "config.h"
 #include "compat.h"
+#if defined(WIN32) && defined(DYNAMIC_BUILD)
+#define LINK_MPG123_DLL
+#endif
 #include "mpg123.h"
 #include "getlopt.h"
 #include <errno.h>
 #include <ctype.h>
-#include "debug.h"
 #include "win32_support.h"
+
+#include "debug.h"
 
 static int errors = 0;
 
@@ -24,10 +28,12 @@ static struct
 {
 	int store_pics;
 	int do_scan;
+	int verbose;
 } param =
 {
 	  FALSE
 	, TRUE
+	, FALSE
 };
 
 static const char* progname;
@@ -48,10 +54,11 @@ static void usage(int err)
 	fprintf(o," -n     --no-scan           do not scan entire file (just beginning)\n");
 	fprintf(o," -p     --store-pics        write APIC frames (album art pictures) to files\n");
 	fprintf(o,"                            file names using whole input file name as prefix\n");
+	fprintf(o," -v     --verbose           verbose messages from parser\n");
 	fprintf(o,"\nNote that text output will always be in UTF-8, regardless of locale.\n");
 	exit(err);
 }
-static void want_usage(char* bla)
+static void want_usage(char* bla, topt *opts)
 {
 	usage(0);
 }
@@ -61,6 +68,7 @@ static topt opts[] =
 	 {'h', "help",         0,       want_usage, 0,                 0}
 	,{'n', "no-scan",      GLO_INT, 0,          &param.do_scan,    FALSE}
 	,{'p', "store-pics",   GLO_INT, 0,          &param.store_pics, TRUE}
+	,{'v', "verbose",      GLO_INT, 0,          &param.verbose, TRUE}
 	,{0, 0, 0, 0, 0, 0}
 };
 
@@ -287,10 +295,13 @@ int open_picfile(const char* prefix, mpg123_picture* pic)
 	fd = compat_open(pfn, O_CREAT|O_WRONLY|O_EXCL);
 	while(fd < 0 && errno == EEXIST && ++count < ULONG_MAX)
 	{
-		char dum;
+		char dum[3];
 		size_t digits;
 
-		digits = snprintf(&dum, 1, "%lu", count);
+		// Just want to know the number of bytes needed.
+		// Modern compiler diagnostics complain if limit is smaller than
+		// format string, so increasing dummy to 3 characters.
+		digits = snprintf(dum, 3, "%lu", count);
 		if(!(pfn=safe_realloc(pfn, len+digits+1))) exit(11);
 
 		sprintf(pfn, "%s.%s%lu.%s", prefix, typestr, count, end);
@@ -327,7 +338,7 @@ static void store_pictures(const char* prefix, mpg123_id3v2 *v2)
 			FILE* picfile = compat_fdopen(fd, "w");
 			if(picfile)
 			{
-				if(fwrite(pic->data, pic->size, 1, picfile) != 1)
+				if(unintr_fwrite(pic->data, pic->size, 1, picfile) != 1)
 				{
 					error("Failure to write data.");
 					++errors;
@@ -376,6 +387,8 @@ int main(int argc, char **argv)
 	mpg123_init();
 	m = mpg123_new(NULL, NULL);
 	mpg123_param(m, MPG123_ADD_FLAGS, MPG123_PICTURE, 0.);
+	mpg123_param(m, MPG123_VERBOSE, param.verbose ? 4 : 0, 0.);
+	mpg123_param(m, MPG123_RESYNC_LIMIT, -1, 0.0);
 
 	for(i=loptind; i < argc; ++i)
 	{

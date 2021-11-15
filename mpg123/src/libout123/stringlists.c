@@ -1,7 +1,7 @@
 /*
 	stringlists: creation of paired string lists for one-time consumption
 
-	copyright 2015 by the mpg123 project
+	copyright 2015-2021 by the mpg123 project
 	free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Thomas Orgis
@@ -11,9 +11,19 @@
 */
 
 #include "compat.h"
+#include "out123.h"
+
+static char* always_strdup(const char *in)
+{
+	char *out = in ? compat_strdup(in) : malloc(1);
+	if(!in && out)
+		out[0] = 0;
+	return out;
+}
 
 /* Construction helper for paired string lists.
    Returns 0 on success. */
+// Also converts NULL to empty string for safer use later.
 int stringlists_add( char ***alist, char ***blist
                    , const char *atext, const char *btext, int *count)
 {
@@ -33,8 +43,8 @@ int stringlists_add( char ***alist, char ***blist
 		return -1;
 
 	if(
-		(atextcopy = compat_strdup(atext))
-	&&	(btextcopy = compat_strdup(btext))
+		(atextcopy = always_strdup(atext))
+	&&	(btextcopy = always_strdup(btext))
 	)
 	{
 		(*alist)[*count] = atextcopy;
@@ -44,8 +54,24 @@ int stringlists_add( char ***alist, char ***blist
 	}
 	else
 	{
+		free(btextcopy);
 		free(atextcopy);
 		return -1;
 	}
 }
 
+void out123_stringlists_free(char **alist, char **blist, int count)
+{
+	if(alist)
+	{
+		for(int i=0; i<count; ++i)
+			free(alist[i]);
+		free(alist);
+	}
+	if(blist)
+	{
+		for(int i=0; i<count; ++i)
+			free(blist[i]);
+		free(blist);
+	}
+}

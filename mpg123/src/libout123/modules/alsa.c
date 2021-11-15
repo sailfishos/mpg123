@@ -1,7 +1,7 @@
 /*
 	alsa: sound output with Advanced Linux Sound Architecture 1.x API
 
-	copyright 2006-2016 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright 2006-2020 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 
 	initially written by Clemens Ladisch <clemens@ladisch.de>
@@ -135,8 +135,8 @@ static int initialize_device(out123_handle *ao)
 		if(!AOQUIET) error("initialize_device(): cannot get sw params");
 		return -1;
 	}
-	/* start playing right away */
-	if (snd_pcm_sw_params_set_start_threshold(pcm, sw, 1) < 0) {
+	/* Start playing once we got at least full period ... this is not default? */
+	if (snd_pcm_sw_params_set_start_threshold(pcm, sw, buffer_size/2) < 0) {
 		if(!AOQUIET) error("initialize_device(): cannot set start threshold");
 		return -1;
 	}
@@ -238,7 +238,8 @@ static int write_alsa(out123_handle *ao, unsigned char *buf, int bytes)
 	}
 	if(written < 0)
 	{
-		error1("Fatal problem with alsa output, error %i.", (int)written);
+		if(!AOQUIET)
+			error1("Fatal problem with alsa output, error %i.", (int)written);
 		return -1;
 	}
 	else return snd_pcm_frames_to_bytes(pcm, written);
@@ -276,6 +277,36 @@ static int close_alsa(out123_handle *ao)
 	else return 0;
 }
 
+static int enumerate_alsa( out123_handle *ao, int (*store_device)(void *devlist
+,	const char *name, const char *description), void *devlist )
+{
+	void ** hints;
+	int ret = snd_device_name_hint(-1, "pcm", &hints);
+	if(ret)
+	{
+		if(!AOQUIET)
+			merror("ALSA device listing failed with code %d.", ret);
+		return -1;
+	}
+	void ** hint = hints;
+	while(!ret && *hint)
+	{
+		char *io = snd_device_name_get_hint(*hint, "IOID");
+		if((io == NULL || !strcmp("Output", io)))
+		{
+			char *name = snd_device_name_get_hint(*hint, "NAME");
+			char *desc = snd_device_name_get_hint(*hint, "DESC");
+			ret = store_device(devlist, name, desc);
+			free(name);
+			free(desc);
+		}
+		free(io);
+		++hint;
+	}
+	snd_device_name_free_hint(hints);
+	return 0;
+}
+
 static int init_alsa(out123_handle* ao)
 {
 	if (ao==NULL) return -1;
@@ -287,13 +318,11 @@ static int init_alsa(out123_handle* ao)
 	ao->write = write_alsa;
 	ao->get_formats = get_formats_alsa;
 	ao->close = close_alsa;
+	ao->enumerate = enumerate_alsa;
 
 	/* Success */
 	return 0;
 }
-
-
-
 /* 
 	Module information data structure
 */

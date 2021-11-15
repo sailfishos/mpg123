@@ -68,7 +68,7 @@ static int open_openal(out123_handle *ao)
 
 static int get_formats_openal(out123_handle *ao)
 {
-	return MPG123_ENC_SIGNED_16|MPG123_ENC_UNSIGNED_8|((alIsExtensionPresent((ALubyte*)"AL_EXT_float32") == AL_TRUE) ? MPG123_ENC_FLOAT_32 : 0);
+	return MPG123_ENC_SIGNED_16|MPG123_ENC_UNSIGNED_8|((alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) ? MPG123_ENC_FLOAT_32 : 0);
 }
 
 static int write_openal(out123_handle *ao, unsigned char *buf, int len)
@@ -145,7 +145,7 @@ static void flush_openal(out123_handle *ao)
 	}
 }
 
-static int deinit_openal(out123_handle* ao)
+static void deinit_openal(out123_handle* ao)
 {
 	/* Free up memory */
 	if(ao->userptr)
@@ -153,9 +153,6 @@ static int deinit_openal(out123_handle* ao)
 		free( ao->userptr );
 		ao->userptr = NULL;
 	}
-
-	/* Success */
-	return 0;
 }
 
 static int init_openal(out123_handle* ao)

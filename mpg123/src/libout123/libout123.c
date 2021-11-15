@@ -1,13 +1,14 @@
 /*
 	audio: audio output interface
 
-	copyright ?-2016 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright ?-2020 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Michael Hipp
 */
 
 #include "out123_int.h"
 #include "wav.h"
+#include "hextxt.h"
 #ifndef NOXFERMEM
 #include "buffer.h"
 static int have_buffer(out123_handle *ao)
@@ -29,11 +30,10 @@ static const char *default_name = "out123";
 
 static int modverbose(out123_handle *ao, int final)
 {
-	debug3("modverbose: %x %x %x"
-	,	(unsigned)ao->flags, (unsigned)ao->auxflags, (unsigned)OUT123_QUIET);
-	return AOQUIET
-	?	(final ? 0 : -1)
-	:	ao->verbose;
+	mdebug( "modverbose: %x %x %x %d %d"
+	,	(unsigned)ao->flags, (unsigned)ao->auxflags, (unsigned)OUT123_QUIET
+	,	final, ao->verbose );
+	return final ? (AOQUIET ? 0 : ao->verbose) : -1;
 }
 
 static void check_output_module( out123_handle *ao
@@ -48,6 +48,7 @@ static void out123_clear_module(out123_handle *ao)
 	ao->drain = NULL;
 	ao->close = NULL;
 	ao->deinit = NULL;
+	ao->enumerate = NULL;
 
 	ao->module = NULL;
 	ao->userptr = NULL;
@@ -94,6 +95,7 @@ out123_handle* attribute_align_arg out123_new(void)
 	ao->channels = -1;
 	ao->format = -1;
 	ao->framesize = 0;
+	memset(ao->zerosample, 0, 8);
 	ao->state = play_dead;
 	ao->auxflags = 0;
 	ao->preload = 0.;
@@ -120,6 +122,11 @@ void attribute_align_arg out123_del(out123_handle *ao)
 	free(ao);
 }
 
+void attribute_align_arg out123_free(void *ptr)
+{
+	free(ptr);
+}
+
 /* Error reporting */
 
 /* Carefully keep that in sync with the error enum! */
@@ -140,6 +147,8 @@ static const char *const errstring[] =
 ,	"unknown parameter code"
 ,	"attempt to set read-only parameter"
 ,	"invalid out123 handle"
+,	"operation not supported"
+,	"device enumeration failed"
 };
 
 const char* attribute_align_arg out123_strerror(out123_handle *ao)
@@ -199,6 +208,13 @@ out123_set_buffer(out123_handle *ao, size_t buffer_bytes)
 }
 
 int attribute_align_arg
+out123_param2( out123_handle *ao, int code
+            , long value, double fvalue, const char *svalue )
+{
+	return out123_param(ao, code, value, fvalue, svalue);
+}
+
+int attribute_align_arg
 out123_param( out123_handle *ao, enum out123_parms code
             , long value, double fvalue, const char *svalue )
 {
@@ -213,6 +229,12 @@ out123_param( out123_handle *ao, enum out123_parms code
 	{
 		case OUT123_FLAGS:
 			ao->flags = (int)value;
+		break;
+		case OUT123_ADD_FLAGS:
+			ao->flags |= (int)value;
+		break;
+		case OUT123_REMOVE_FLAGS:
+			ao->flags &= ~((int)value);
 		break;
 		case OUT123_PRELOAD:
 			ao->preload = fvalue;
@@ -256,6 +278,13 @@ out123_param( out123_handle *ao, enum out123_parms code
 }
 
 int attribute_align_arg
+out123_getparam2( out123_handle *ao, int code
+               , long *ret_value, double *ret_fvalue, char* *ret_svalue )
+{
+	return out123_getparam(ao, code, ret_value, ret_fvalue, ret_svalue);
+}
+
+int attribute_align_arg
 out123_getparam( out123_handle *ao, enum out123_parms code
                , long *ret_value, double *ret_fvalue, char* *ret_svalue )
 {
@@ -273,6 +302,7 @@ out123_getparam( out123_handle *ao, enum out123_parms code
 	switch(code)
 	{
 		case OUT123_FLAGS:
+		case OUT123_ADD_FLAGS:
 			value = ao->flags;
 		break;
 		case OUT123_PRELOAD:
@@ -344,7 +374,6 @@ int write_parameters(out123_handle *ao, int who)
 	&&	GOOD_WRITEVAL(fd, ao->gain)
 	&&	GOOD_WRITEVAL(fd, ao->device_buffer)
 	&&	GOOD_WRITEVAL(fd, ao->verbose)
-	&&	GOOD_WRITEVAL(fd, ao->propflags)
 	&& !xfer_write_string(ao, who, ao->name)
 	&& !xfer_write_string(ao, who, ao->bindir)
 	)
@@ -365,7 +394,6 @@ int read_parameters(out123_handle *ao
 	&&	GOOD_READVAL_BUF(fd, ao->gain)
 	&&	GOOD_READVAL_BUF(fd, ao->device_buffer)
 	&&	GOOD_READVAL_BUF(fd, ao->verbose)
-	&&	GOOD_READVAL_BUF(fd, ao->propflags)
 	&& !xfer_read_string(ao, who, &ao->name)
 	&& !xfer_read_string(ao, who, &ao->bindir)
 	)
@@ -522,7 +550,16 @@ out123_start(out123_handle *ao, long rate, int channels, int encoding)
 	ao->rate      = rate;
 	ao->channels  = channels;
 	ao->format    = encoding;
-	ao->framesize = out123_encsize(encoding)*channels;
+	int samplesize = out123_encsize(encoding);
+	ao->framesize = samplesize*channels;
+	// The most convoluted way to say nothing at all.
+	for(int i=0; i<samplesize; ++i)
+#ifdef WORDS_BIGENDIAN
+		ao->zerosample[samplesize-1-i] =
+#else
+		ao->zerosample[i] =
+#endif
+		MPG123_ZEROSAMPLE(ao->format, samplesize, i);
 
 #ifndef NOXFERMEM
 	if(have_buffer(ao))
@@ -611,6 +648,30 @@ void attribute_align_arg out123_stop(out123_handle *ao)
 	ao->state = play_stopped;
 }
 
+// Replace the data in a given block of audio data with zeroes
+// in the correct encoding.
+static void mute_block( unsigned char *bytes, int count
+,	unsigned char* zerosample, int samplesize )
+{
+	// The count is expected to be a multiple of samplesize,
+	// this is just to ensure that the loop ends properly, should be noop.
+	count -= count % samplesize;
+	if(!count)
+		return;
+	// Initialize with one zero sample, then multiply that
+	// to eventually cover the whole buffer.
+	memcpy(bytes, zerosample, samplesize);
+	int offset = samplesize;
+	count     -= samplesize;
+	while(count)
+	{
+		int block = offset > count ? count : offset;
+		memcpy(bytes+offset, bytes, block);
+		offset += block;
+		count  -= block;
+	}
+}
+
 size_t attribute_align_arg
 out123_play(out123_handle *ao, void *bytes, size_t count)
 {
@@ -643,24 +704,41 @@ out123_play(out123_handle *ao, void *bytes, size_t count)
 		return buffer_write(ao, bytes, count);
 	else
 #endif
-	do /* Playback in a loop to be able to continue after interruptions. */
 	{
-		errno = 0;
-		written = ao->write(ao, (unsigned char*)bytes, (int)count);
-		debug4( "written: %d errno: %i (%s), keep_on=%d"
-		,	written, errno, strerror(errno)
-		,	ao->flags & OUT123_KEEP_PLAYING );
-		if(written >= 0){ sum+=written; count -= written; }
-		else if(errno != EINTR)
+		// Write 16K in a piece as maximum, as I've seen random short
+		// writes of big blocks with ALSA.
+		int maxcount = 1<<14;
+		maxcount -= maxcount % ao->framesize;
+		if(maxcount < 1)
+			maxcount = ao->framesize;
+		if(ao->flags & OUT123_MUTE)
+			mute_block( bytes, count, ao->zerosample
+			,	MPG123_SAMPLESIZE(ao->format) );
+		do /* Playback in a loop to be able to continue after interruptions. */
 		{
-			ao->errcode = OUT123_DEV_PLAY;
-			if(!AOQUIET)
-				error1("Error in writing audio (%s?)!", strerror(errno));
-			/* If written < 0, this is a serious issue ending this playback round. */
-			break;
-		}
-	} while(count && ao->flags & OUT123_KEEP_PLAYING);
-
+			errno = 0;
+			int block = count > maxcount ? maxcount : count;
+			written = ao->write(ao, bytes, block);
+			debug4( "written: %d errno: %i (%s), keep_on=%d"
+			,	written, errno, strerror(errno)
+			,	ao->flags & OUT123_KEEP_PLAYING );
+			if(written > 0)
+			{
+				bytes  = (char*)bytes+written;
+				sum   += written;
+				count -= written;
+			}
+			if(written < block && errno != EINTR)
+			{
+				ao->errcode = OUT123_DEV_PLAY;
+				if(!AOQUIET)
+					merror( "Error in writing audio, wrote only %d of %d (%s?)!"
+					,	written, block, strerror(errno) );
+				/* This is a serious issue ending this playback round. */
+				break;
+			}
+		} while(count && ao->flags & OUT123_KEEP_PLAYING);
+	}
 	debug3( "out123_play(%p, %p, ...) = %"SIZE_P
 	,	(void*)ao, bytes, (size_p)sum );
 	return sum;
@@ -826,6 +904,28 @@ static int open_fake_module(out123_handle *ao, const char *driver)
 		ao->drain = wav_drain;
 		ao->close = au_close;
 	}
+	else
+	if(!strcmp("hex", driver))
+	{
+		ao->propflags &= ~OUT123_PROP_LIVE;
+		ao->open  = hex_open;
+		ao->get_formats = hex_formats;
+		ao->write = hex_write;
+		ao->flush = builtin_nothing;
+		ao->drain = hextxt_drain;
+		ao->close = hextxt_close;
+	}
+	else
+	if(!strcmp("txt", driver))
+	{
+		ao->propflags &= ~OUT123_PROP_LIVE;
+		ao->open  = txt_open;
+		ao->get_formats = txt_formats;
+		ao->write = txt_write;
+		ao->flush = builtin_nothing;
+		ao->drain = hextxt_drain;
+		ao->close = hextxt_close;
+	}
 	else return OUT123_ERR;
 
 	return OUT123_OK;
@@ -854,7 +954,7 @@ static void check_output_module( out123_handle *ao
 	/* Check if module supports output */
 	if(!ao->module->init_output)
 	{
-		if(final)
+		if(final && !AOQUIET)
 			error1("Module '%s' does not support audio output.", name);
 		goto check_output_module_cleanup;
 	}
@@ -876,8 +976,13 @@ static void check_output_module( out123_handle *ao
 		debug1("ao->open() = %i", result);
 		if(result >= 0) /* Opening worked, close again. */
 			ao->close(ao);
-		else if(ao->deinit)
-			ao->deinit(ao); /* Failed, ensure that cleanup after init_output() occurs. */
+		else
+		{
+			if(!AOQUIET)
+				merror("Module '%s' device open failed.", name);
+			if(ao->deinit)
+				ao->deinit(ao); /* Failed, ensure that cleanup after init_output() occurs. */
+		}
 	}
 	else if(!AOQUIET)
 		error2("Module '%s' init failed: %i", name, result);
@@ -913,7 +1018,6 @@ out123_drivers(out123_handle *ao, char ***names, char ***descr)
 	char **tmpnames;
 	char **tmpdescr;
 	int count;
-	int i;
 
 	if(!ao)
 		return -1;
@@ -942,28 +1046,119 @@ out123_drivers(out123_handle *ao, char ***names, char ***descr)
 		,	"au", "Sun AU file (builtin)", &count )
 	||	stringlists_add( &tmpnames, &tmpdescr
 		,	"test", "output into the void (builtin)", &count )
+	||	stringlists_add( &tmpnames, &tmpdescr
+		,	"hex", "interleaved hex printout (builtin)", &count )
+	||	stringlists_add( &tmpnames, &tmpdescr
+		,	"txt", "plain text printout, a column per channel (builtin)", &count )
 	)
 		if(!AOQUIET)
 			error("OOM");
 
 	/* Return or free gathered lists of names or descriptions. */
 	if(names)
-		*names = tmpnames;
-	else
 	{
-		for(i=0; i<count; ++i)
-			free(tmpnames[i]);
-		free(tmpnames);
+		*names = tmpnames;
+		tmpnames = NULL;
 	}
 	if(descr)
+	{
 		*descr = tmpdescr;
+		tmpdescr = NULL;
+	}
+	out123_stringlists_free(tmpnames, tmpdescr, count);
+	return count;
+}
+
+struct devlist
+{
+	int count;
+	char **names;
+	char **descr;
+};
+
+static int devlist_add(void *dll, const char *name, const char *descr)
+{
+	struct devlist *dl = (struct devlist*)dll;
+	return dl
+	?	stringlists_add(&(dl->names), &(dl->descr), name, descr, &(dl->count))
+	:	-1;
+}
+
+int out123_devices( out123_handle *ao, const char *driver, char ***names, char ***descr
+,	char **active_driver )
+{
+	int ret = 0;
+	struct devlist dl = {0, NULL, NULL};
+	char *realdrv = NULL;
+	debug("");
+	if(!ao)
+		return -1;
+#ifndef NOXFERMEM
+	if(have_buffer(ao))
+		return out123_seterr(ao, OUT123_NOT_SUPPORTED);
+#endif
+
+	ao->errcode = OUT123_OK;
+	// If the driver is a single word, not a list with commas.
+	// Then don't try to open drivers just to know which we are talking about.
+	if(driver && strchr(driver, ',') == NULL)
+		realdrv = compat_strdup(driver);
 	else
 	{
-		for(i=0; i<count; ++i)
-			free(tmpdescr[i]);
-		free(tmpdescr);
+		mdebug("need to find a driver from: %s", driver ? driver : DEFAULT_OUTPUT_MODULE);
+		if(out123_open(ao, driver, NULL) != OUT123_OK)
+			return out123_seterr(ao, OUT123_BAD_DRIVER);
+		mdebug("deduced driver: %s", ao->driver);
+		realdrv = compat_strdup(ao->driver);
 	}
-	return count;
+	if(realdrv == NULL)
+		return out123_seterr(ao, OUT123_DOOM);
+
+	out123_close(ao);
+
+	if(open_fake_module(ao, realdrv) != OUT123_OK)
+	{
+		ao->module = open_module( "output", realdrv
+		,	modverbose(ao, 0), ao->bindir );
+		/* Open the module, initial check for availability+libraries. */
+		if( !ao->module || !ao->module->init_output
+			|| ao->module->init_output(ao) )
+			ret = out123_seterr(ao, OUT123_BAD_DRIVER);
+	}
+
+	if(!ret && ao->enumerate)
+	{
+		if(!ao->enumerate(ao, devlist_add, &dl))
+		{
+			ret = dl.count;
+			if(names)
+			{
+				*names = dl.names;
+				dl.names = NULL;
+			}
+			if(descr)
+			{
+				*descr = dl.descr;
+				dl.descr = NULL;
+			}
+			if(active_driver)
+			{
+				*active_driver = realdrv;
+				realdrv = NULL;
+			}
+		} else
+			ret = out123_seterr(ao, OUT123_DEV_ENUMERATE);
+		out123_stringlists_free(dl.names, dl.descr, dl.count);
+		if(ao->deinit)
+			ao->deinit(ao);
+	} else if(!ret)
+		ret = out123_seterr(ao, OUT123_NOT_SUPPORTED);
+
+	free(realdrv);
+	if(ao->module)
+		close_module(ao->module, modverbose(ao, 0));
+	out123_clear_module(ao);
+	return ret;
 }
 
 /* We always have ao->driver and ao->device set, also with buffer.

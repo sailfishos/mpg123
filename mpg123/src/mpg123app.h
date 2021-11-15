@@ -1,7 +1,7 @@
 /*
 	mpg123: main code of the program (not of the decoder...)
 
-	copyright 1995-2015 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright 1995-2020 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Michael Hipp
 
@@ -28,7 +28,7 @@
 #include "mpg123.h"
 #define MPG123_REMOTE
 #define REMOTE_BUFFER_SIZE 2048
-#define MAXOUTBURST 32768
+//#define MAXOUTBURST 32768
 
 #ifdef __GNUC__
 #define INLINE inline
@@ -41,6 +41,8 @@
 #define VERBOSE_MAX 3
 
 extern char* binpath; /* argv[0], actually... */
+extern int stdout_is_term;
+extern int stderr_is_term;
 
 struct parameter
 {
@@ -64,7 +66,6 @@ struct parameter
 #endif
 	int checkrange;
 	int force_reopen;
-	int test_cpu;
 	long realtime;
 #ifdef HAVE_WINDOWS_H
 	int w32_priority;
@@ -72,7 +73,6 @@ struct parameter
 	long listentry; /* possibility to choose playback of one entry in playlist (0: off, > 0 : select, < 0; just show list*/
 	char* listname; /* name of playlist */
 	int long_id3;
-	int list_cpu;
 	char *cpu;
 #ifdef FIFO
 	char* fifo;
@@ -89,8 +89,9 @@ struct parameter
 	long start_frame;  /* frame offset to begin with */
 	long frame_number; /* number of frames to decode */
 	long outscale;
-	int flags;
+	long flags;
 	long force_rate;
+	int resample;
 	int talk_icy;
 	long resync_limit;
 	int smooth;
@@ -123,8 +124,6 @@ enum mpg123app_flags
 extern char *equalfile;
 extern off_t framenum;
 extern struct httpdata htd;
-
-extern int OutputDescriptor;
 
 extern int intflag;
 

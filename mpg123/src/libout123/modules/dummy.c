@@ -23,7 +23,7 @@ static int open_dummy(out123_handle *ao)
 static int get_formats_dummy(out123_handle *ao)
 {
 	debug("get_formats_dummy()");
-	return MPG123_ENC_SIGNED_16;
+	return MPG123_ENC_ANY;
 }
 
 static int write_dummy(out123_handle *ao,unsigned char *buf,int len)
@@ -43,9 +43,18 @@ static int close_dummy(out123_handle *ao)
 	return 0;
 }
 
-static int deinit_dummy(out123_handle *ao)
+static void deinit_dummy(out123_handle *ao)
 {
 	debug("deinit_dummy()");
+}
+
+static int enumerate_dummy( out123_handle *ao, int (*store_device)(void *devlist
+,	const char *name, const char *description), void *devlist)
+{
+	if(store_device(devlist, "foo", "some dummy device"))
+		return -1;
+	if(store_device(devlist, "bar", "some other dummy device"))
+		return -1;
 	return 0;
 }
 
@@ -62,6 +71,7 @@ static int init_dummy(out123_handle* ao)
 	ao->get_formats = get_formats_dummy;
 	ao->close = close_dummy;
 	ao->deinit = deinit_dummy;
+	ao->enumerate = enumerate_dummy;
 
 	/* Success */
 	return 0;
