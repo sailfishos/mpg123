@@ -6,7 +6,7 @@
 	It is envisioned to include this compat header instead of any of the "standard" headers, to catch compatibility issues.
 	So, don't include stdlib.h or string.h ... include compat.h.
 
-	copyright 2007-8 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright 2007-21 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Thomas Orgis
 */
@@ -15,15 +15,9 @@
 #define MPG123_COMPAT_H
 
 #include "config.h"
-#include "intsym.h"
 
-/* For --nagging compilation with -std=c89, we need
-   to disable the inline keyword. */
-#ifdef PLAIN_C89
-#ifndef inline
-#define inline
-#endif
-#endif
+// We are using C99 now, including possibly single-precision math.
+#define _ISO_C99_SOURCE
 
 #include <errno.h>
 
@@ -66,6 +60,9 @@
 #ifndef SIZE_MAX
 #define SIZE_MAX ((size_t)-1)
 #endif
+#ifndef SSIZE_MAX
+#define SSIZE_MAX ((size_t)-1/2)
+#endif
 #ifndef ULONG_MAX
 #define ULONG_MAX ((unsigned long)-1)
 #endif
@@ -101,14 +98,28 @@
 
 typedef unsigned char byte;
 
-#if defined(_MSC_VER) && !defined(MPG123_DEF_SSIZE_T)
+#if defined(_MSC_VER)
+
+// For _setmode(), at least.
+#include <io.h>
+
+#if !defined(MPG123_DEF_SSIZE_T)
 #define MPG123_DEF_SSIZE_T
 #include <stddef.h>
 typedef ptrdiff_t ssize_t;
 #endif
 
+#endif
+
+// Not too early, leave system headers alone (strerror).
+#include "intsym.h"
+
 /* A safe realloc also for very old systems where realloc(NULL, size) returns NULL. */
 void *safe_realloc(void *ptr, size_t size);
+// Also freeing ptr if result is NULL. You can do
+// ptr = safer_realloc(ptr, size)
+// Also, ptr = safer_realloc(ptr, 0) will do free(ptr); ptr=NULL;.
+void *safer_realloc(void *ptr, size_t size);
 #ifndef HAVE_STRERROR
 const char *strerror(int errnum);
 #endif
@@ -120,7 +131,7 @@ char* compat_strdup(const char *s);
 /* If we have the size checks enabled, try to derive some sane printfs.
    Simple start: Use max integer type and format if long is not big enough.
    I am hesitating to use %ll without making sure that it's there... */
-#if !(defined PLAIN_C89) && (defined SIZEOF_OFF_T) && (SIZEOF_OFF_T > SIZEOF_LONG) && (defined PRIiMAX)
+#if (defined SIZEOF_OFF_T) && (SIZEOF_OFF_T > SIZEOF_LONG) && (defined PRIiMAX)
 # define OFF_P PRIiMAX
 typedef intmax_t off_p;
 #else
@@ -128,7 +139,7 @@ typedef intmax_t off_p;
 typedef long off_p;
 #endif
 
-#if !(defined PLAIN_C89) && (defined SIZEOF_SIZE_T) && (SIZEOF_SIZE_T > SIZEOF_LONG) && (defined PRIuMAX)
+#if (defined SIZEOF_SIZE_T) && (SIZEOF_SIZE_T > SIZEOF_LONG) && (defined PRIuMAX)
 # define SIZE_P PRIuMAX
 typedef uintmax_t size_p;
 #else
@@ -136,7 +147,7 @@ typedef uintmax_t size_p;
 typedef unsigned long size_p;
 #endif
 
-#if !(defined PLAIN_C89) && (defined SIZEOF_SSIZE_T) && (SIZEOF_SSIZE_T > SIZEOF_LONG) && (defined PRIiMAX)
+#if (defined SIZEOF_SSIZE_T) && (SIZEOF_SSIZE_T > SIZEOF_LONG) && (defined PRIiMAX)
 # define SSIZE_P PRIuMAX
 typedef intmax_t ssize_p;
 #else
@@ -191,8 +202,8 @@ int win32_wide_utf8(const wchar_t * const wptr, char **mbptr, size_t * buflen);
  * win32_mbc2uni
  * Converts a null terminated UTF-8 string to a UCS-2 equivalent.
  * Caller is supposed to free allocated buffer.
- * @param[out] mbptr Pointer to multibyte string.
- * @param[in] wptr Pointer to wide string.
+ * @param[in] mbptr Pointer to multibyte string.
+ * @param[out] wptr Pointer to wide string.
  * @param[out] buflen Optional parameter for length of allocated buffer.
  * @return status of WideCharToMultiByte conversion.
  *
@@ -264,10 +275,11 @@ void  compat_dlclose(void *handle);
 #endif
 
 /* Blocking write/read of data with signal resilience.
-   Both continue after being interrupted by signals and always return the
+   They continue after being interrupted by signals and always return the
    amount of processed data (shortage indicating actual problem or EOF). */
 size_t unintr_write(int fd, void const *buffer, size_t bytes);
 size_t unintr_read (int fd, void *buffer, size_t bytes);
+size_t unintr_fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 
 /* That one comes from Tellie on OS/2, needed in resolver. */
 #ifdef __KLIBC__

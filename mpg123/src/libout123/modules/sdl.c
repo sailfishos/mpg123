@@ -6,6 +6,10 @@
 	initially written by Nicholas J. Humfrey
 */
 
+/* Want usleep */
+#define _XOPEN_SOURCE 500
+#define _DEFAULT_SOURCE
+
 #include "out123_int.h"
 #include <math.h>
 
@@ -231,7 +235,7 @@ static void flush_sdl(out123_handle *ao)
 
 /* You can only rely on that being called after successful init_sdl()!
    And sdl_close() should be called before to free the sfifo. */
-static int deinit_sdl(out123_handle* ao)
+static void deinit_sdl(out123_handle* ao)
 {
 	/* Free up memory */
 	if (ao->userptr) {
@@ -241,9 +245,6 @@ static int deinit_sdl(out123_handle* ao)
 
 	/* Shut down SDL */
 	SDL_Quit();
-
-	/* Success */
-	return 0;
 }
 
 /* Remember: If this returns failure, no additional cleanup happens.

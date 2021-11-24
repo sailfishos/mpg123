@@ -1,7 +1,7 @@
 /*
 	playlist: playlist logic
 
-	copyright 1995-2008 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright 1995-2020 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Michael Hipp, outsourced/reorganized by Thomas Orgis
 
@@ -18,6 +18,8 @@
 #include "term.h" /* for term_restore */
 #include "playlist.h"
 #include "httpget.h"
+#include "local.h"
+#include "metaprint.h"
 #include <time.h> /* For srand(). */
 #include "debug.h"
 
@@ -56,22 +58,26 @@ typedef struct playlist_struct
 	mpg123_string linebuf;
 	mpg123_string dir;
 	enum playlist_type type;
+	int is_utf8; /* if we really know the contents are UTF-8-encooded */
+	int hit_end;
 #if defined (WANT_WIN32_SOCKETS)
 	int sockd; /* Is Win32 socket descriptor working? */
 #endif
+	// If the playlist itself or an input file was '-' (stdin not usable for terminal.).
+	int stdin_used;
 } playlist_struct;
 
 /* one global instance... add a pointer to this to every function definition and you have OO-style... */
 static playlist_struct pl;
 
-static int add_next_file (int argc, char *argv[]);
+static int add_next_file (int argc, char *argv[], int args_utf8);
 static void shuffle_playlist(void);
 static void init_playlist(void);
 static int add_copy_to_playlist(char* new_entry);
 static int add_to_playlist(char* new_entry, char freeit);
 
 /* used to be init_input */
-void prepare_playlist(int argc, char** argv)
+void prepare_playlist(int argc, char** argv, int args_utf8, int *is_utf8)
 {
 	/*
 		fetch all playlist entries ... I don't consider playlists to be an endless stream.
@@ -79,7 +85,7 @@ void prepare_playlist(int argc, char** argv)
 		We may even provide a simple wrapper script that emulates the old playlist reading behaviour (for files and stdin, http playlists are actually a strong point on reading the list in _before_ starting playback since http connections don't last forever).
 	*/
 	init_playlist();
-	while (add_next_file(argc, argv)) {}
+	while (add_next_file(argc, argv, args_utf8)) {}
 	if(param.verbose > 1)
 	{
 		fprintf(stderr, "\nplaylist in normal order:\n");
@@ -90,6 +96,8 @@ void prepare_playlist(int argc, char** argv)
 	/* Don't need these anymore, we have copies! */
 	mpg123_free_string(&pl.linebuf);
 	mpg123_free_string(&pl.dir);
+	if(is_utf8)
+		*is_utf8 = pl.is_utf8;
 }
 
 /* Return a random number >= 0 and < n */
@@ -151,14 +159,18 @@ char *get_next_file(void)
 		pl.num = pl.pos+1;
 	}
 
-	/* "-" is STDOUT, "" is dumb, NULL is nothing */
+	/* "-" is STDIN, "" is dumb, NULL is nothing */
 	if(newitem != NULL)
 	{
 		/* Remember the playback position of the track. */
 		newitem->playcount = pl.playcount;
 		return newitem->url;
 	}
-	else return NULL;
+	else
+	{
+		pl.hit_end = TRUE;
+		return NULL;
+	}
 }
 
 size_t playlist_pos(size_t *total, long *loop)
@@ -167,7 +179,7 @@ size_t playlist_pos(size_t *total, long *loop)
 		*total = pl.fill;
 	if(loop)
 		*loop = pl.loop;
-	return pl.num;
+	return pl.hit_end ? pl.fill+1 : pl.num;
 }
 
 void playlist_jump(ssize_t incr)
@@ -282,10 +294,18 @@ static void init_playlist(void)
 	mpg123_init_string(&pl.dir);
 	mpg123_init_string(&pl.linebuf);
 	pl.type = UNKNOWN;
+	pl.is_utf8 = FALSE;
+	pl.hit_end = FALSE;
 	pl.loop = param.loop;
 #ifdef WANT_WIN32_SOCKETS
 	pl.sockd = -1;
 #endif
+	pl.stdin_used = FALSE;
+}
+
+int playlist_stdin()
+{
+	return pl.stdin_used;
 }
 
 /*
@@ -293,9 +313,11 @@ static void init_playlist(void)
 	now doesn't return the next entry but adds it to playlist struct
 	returns 1 if it found something, 0 on end
 */
-static int add_next_file (int argc, char *argv[])
+static int add_next_file (int argc, char *argv[], int args_utf8)
 {
 	int firstline = 0;
+
+	pl.is_utf8 = args_utf8;
 
 	/* hack for url that has been detected as track, not playlist */
 	if(pl.type == NO_LIST) return 0;
@@ -324,6 +346,7 @@ static int add_next_file (int argc, char *argv[])
 	if (param.listname || pl.file)
 	{
 		size_t line_offset = 0;
+		pl.is_utf8 = 0; // Playlist files in env encoding (HTTP lists should be ASCII-clean).
 #ifndef WANT_WIN32_SOCKETS
 		if (!pl.file)
 #else
@@ -334,6 +357,7 @@ static int add_next_file (int argc, char *argv[])
 			if (!*param.listname || !strcmp(param.listname, "-"))
 			{
 				pl.file = stdin;
+				pl.stdin_used = TRUE;
 				param.listname = NULL;
 				pl.entry = 0;
 			}
@@ -370,7 +394,9 @@ static int add_next_file (int argc, char *argv[])
 							pl.type = NO_LIST;
 							if(param.listentry < 0)
 							{
-								printf("#note you gave me a file url, no playlist, so...\n#entry 1\n%s\n", param.listname);
+								printf("#note you gave me a file url, no playlist, so...\n#entry 1\n");
+								print_outstr(stdout, param.listname, args_utf8, stdout_is_term);
+								printf("\n");
 								return 0;
 							}
 							else
@@ -380,7 +406,12 @@ static int add_next_file (int argc, char *argv[])
 								return 1;
 							}
 						}
-						error1("Unknown playlist MIME type %s; maybe "PACKAGE_NAME" can support it in future if you report this to the maintainer.", htd.content_type.p);
+						char *ptmp = NULL;
+						outstr(&ptmp, htd.content_type.p, 0, stderr_is_term);
+						error1( "Unknown playlist MIME type %s; maybe "PACKAGE_NAME
+							" can support it in future if you report this to the maintainer."
+						,	PSTR(ptmp) );
+						free(ptmp);
 					}
 					httpdata_free(&htd);
 				}
@@ -403,7 +434,7 @@ static int add_next_file (int argc, char *argv[])
 #endif
 				}
 			}
-			else if (!(pl.file = fopen(param.listname, "rb")))
+			else if (!(pl.file = compat_fopen(param.listname, "rb")))
 			{
 				perror (param.listname);
 				return 0;
@@ -413,7 +444,13 @@ static int add_next_file (int argc, char *argv[])
 				debug("opened ordinary list file");
 				pl.entry = 0;
 			}
-			if (param.verbose && pl.file) fprintf (stderr, "Using playlist from %s ...\n",	param.listname ? param.listname : "standard input");
+			if (param.verbose && pl.file)
+			{
+				fprintf(stderr, "Using playlist from ");
+				print_outstr( stderr, param.listname ? param.listname : "standard input"
+				,	args_utf8, stderr_is_term );
+				fprintf(stderr, " ...\n");
+			}
 			firstline = 1; /* just opened */
 		}
 		/* reading the file line by line */
@@ -516,10 +553,15 @@ static int add_next_file (int argc, char *argv[])
 				}
 				#endif
 				if (pl.linebuf.p[0]=='\0') continue; /* skip empty lines... */
+
 				if (((pl.type == M3U) && (pl.linebuf.p[0]=='#')))
 				{
 					/* a comment line in m3u file */
-					if(param.listentry < 0) printf("%s\n", pl.linebuf.p);
+					if(param.listentry < 0)
+					{
+						print_outstr(stdout, pl.linebuf.p, 0, stdout_is_term);
+						printf("\n");
+					}
 					continue;
 				}
 
@@ -554,7 +596,12 @@ static int add_next_file (int argc, char *argv[])
 					}
 					else
 					{
-						if(param.listentry < 0) printf("#metainfo %s\n", pl.linebuf.p);
+						if(param.listentry < 0)
+						{
+							printf("#metainfo ");
+							print_outstr(stdout, pl.linebuf.p, 0, stdout_is_term);
+							printf("\n");
+						}
 						continue;
 					}
 				}
@@ -586,7 +633,12 @@ static int add_next_file (int argc, char *argv[])
 					line_offset = 0;
 				}
 				++pl.entry;
-				if(param.listentry < 0) printf("#entry %lu\n%s\n", (unsigned long)pl.entry,pl.linebuf.p+line_offset);
+				if(param.listentry < 0)
+				{
+					printf("#entry %zu\n", pl.entry);
+					print_outstr(stdout, pl.linebuf.p+line_offset, 0, stdout_is_term);
+					printf("\n");
+				}
 				else if((param.listentry == 0) || (param.listentry == pl.entry) || APPFLAG(MPG123APP_CONTINUE))
 				{
 					add_copy_to_playlist(pl.linebuf.p+line_offset);
@@ -659,13 +711,16 @@ static void shuffle_playlist(void)
 void print_playlist(FILE* out, int showpos)
 {
 	size_t loop;
+	int is_term = term_width(fileno(out)) >= 0;
 	for (loop = 0; loop < pl.fill; loop++)
 	{
 		char *pre = "";
 		if(showpos)
 		pre = (loop+1==pl.num) ? "> " : "  ";
 
-		fprintf(out, "%s%s\n", pre, pl.list[loop].url);
+		fprintf(out, "%s", pre);
+		print_outstr(out, pl.list[loop].url, 0, is_term);
+		fprintf(out, "\n");
 	}
 }
 
@@ -704,6 +759,8 @@ static int add_to_playlist(char* new_entry, char freeit)
 	/* paranoid */
 	if(pl.fill < pl.size)
 	{
+		if(!strcmp(new_entry, "-") || !strcmp(new_entry, "/dev/stdin"))
+			pl.stdin_used = TRUE;
 		pl.list[pl.fill].freeit = freeit;
 		pl.list[pl.fill].url = new_entry;
 		pl.list[pl.fill].playcount = 0;

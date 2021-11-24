@@ -1,7 +1,7 @@
 /*
 	out123_int: internal header for libout123
 
-	copyright ?-2016 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright ?-2021 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Michael Hipp (some traces left)
 */
@@ -9,9 +9,15 @@
 #ifndef _MPG123_OUT123_INT_H_
 #define _MPG123_OUT123_INT_H_
 
+#define MPG123_ENUM_API
+
 #include "config.h"
 #include "intsym.h"
 #include "abi_align.h"
+/* export DLL symbols */
+#if defined(WIN32) && defined(DYNAMIC_BUILD)
+#define BUILD_MPG123_DLL
+#endif
 #include "compat.h"
 #include "out123.h"
 #include "module.h"
@@ -68,8 +74,11 @@ struct out123_struct
 	void (*flush)(out123_handle *); /* flush == drop != drain */
 	void (*drain)(out123_handle *);
 	int (*close)(out123_handle *);
-	int (*deinit)(out123_handle *);
-	
+	void (*deinit)(out123_handle *);
+	// Enumerate the available devices, if possible. NULL pointer if module doesn't support this.
+	int (*enumerate)(out123_handle *, int (*store_device)(void *devlist
+	,	const char *name, const char *description), void *devlist);
+
 	/* the loaded that has set the above */
 	mpg123_module_t *module;
 
@@ -83,6 +92,7 @@ struct out123_struct
 	int channels;	/* number of channels */
 	int format;		/* encoding (TODO: rename this to "encoding"!) */
 	int framesize;	/* Output needs data in chunks of framesize bytes. */
+	unsigned char zerosample[8]; /* Zero in current encoding, max 64 bit. */
 	enum playstate state; /* ... */
 	int auxflags;	/* For now just one: quiet mode (for probing). */
 	int propflags;	/* Property flags, set by driver. */

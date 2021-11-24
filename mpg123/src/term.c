@@ -1,7 +1,7 @@
 /*
 	term: terminal control
 
-	copyright ?-2015 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright ?-2019 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 	initially written by Michael Hipp
 */
@@ -20,6 +20,11 @@
 #include "debug.h"
 
 static int term_enable = 0;
+// We can work with the terminal either via stdin or stderr.
+// It can be that only one side is hooked to an interactive terminal.
+// You should be able to pipe terminal control commands (for testing)
+// and still have proper display.
+static int term_fd = -1;
 static struct termios old_tio;
 int seeking = FALSE;
 
@@ -49,17 +54,18 @@ struct keydef term_help[] =
 	,{ MPG123_FINE_REWIND_KEY,  0, "fine rewind" }
 	,{ MPG123_VOL_UP_KEY,   0, "volume up" }
 	,{ MPG123_VOL_DOWN_KEY, 0, "volume down" }
+	,{ MPG123_VOL_MUTE_KEY, 0, "(un)mute volume" }
 	,{ MPG123_RVA_KEY,      0, "RVA switch" }
 	,{ MPG123_VERBOSE_KEY,  0, "verbose switch" }
 	,{ MPG123_PLAYLIST_KEY, 0, "list current playlist, indicating current track there" }
 	,{ MPG123_TAG_KEY,      0, "display tag info (again)" }
 	,{ MPG123_MPEG_KEY,     0, "print MPEG header info (again)" }
-	,{ MPG123_HELP_KEY,     0, "this help" }
-	,{ MPG123_QUIT_KEY,     0, "quit" }
 	,{ MPG123_PITCH_UP_KEY, MPG123_PITCH_BUP_KEY, "pitch up (small step, big step)" }
 	,{ MPG123_PITCH_DOWN_KEY, MPG123_PITCH_BDOWN_KEY, "pitch down (small step, big step)" }
 	,{ MPG123_PITCH_ZERO_KEY, 0, "reset pitch to zero" }
 	,{ MPG123_BOOKMARK_KEY, 0, "print out current position in playlist and track, for the benefit of some external tool to store bookmarks" }
+	,{ MPG123_HELP_KEY,     0, "this help" }
+	,{ MPG123_QUIT_KEY,     0, "quit" }
 };
 
 void term_sigcont(int sig);
@@ -68,6 +74,7 @@ static void term_sigusr(int sig);
 /* This must call only functions safe inside a signal handler. */
 int term_setup(struct termios *pattern)
 {
+	mdebug("setup on fd %d", term_fd);
 	struct termios tio = *pattern;
 
 	/* One might want to use sigaction instead. */
@@ -78,7 +85,7 @@ int term_setup(struct termios *pattern)
 	tio.c_lflag &= ~(ICANON|ECHO); 
 	tio.c_cc[VMIN] = 1;
 	tio.c_cc[VTIME] = 0;
-	return tcsetattr(0,TCSANOW,&tio);
+	return tcsetattr(term_fd,TCSANOW,&tio);
 }
 
 void term_sigcont(int sig)
@@ -109,8 +116,8 @@ void term_init(void)
 	const char hide_cursor[] = "\x1b[?25l";
 	debug("term_init");
 
-	if(term_have_fun(STDERR_FILENO))
-		write(STDERR_FILENO, hide_cursor, sizeof(hide_cursor));
+	if(term_have_fun(STDERR_FILENO, param.term_visual))
+		fprintf(stderr, "%s", hide_cursor);
 
 	debug1("param.term_ctrl: %i", param.term_ctrl);
 	if(!param.term_ctrl)
@@ -118,7 +125,8 @@ void term_init(void)
 
 	term_enable = 0;
 
-	if(tcgetattr(0,&old_tio) < 0)
+	if( tcgetattr(term_fd=STDERR_FILENO,&old_tio) < 0
+		&& tcgetattr(term_fd=STDIN_FILENO,&old_tio) < 0 )
 	{
 		fprintf(stderr,"Can't get terminal attributes\n");
 		return;
@@ -199,7 +207,7 @@ off_t term_control(mpg123_handle *fr, out123_handle *ao)
 		term_handle_input(fr, ao, stopped|seeking);
 		if((offset < 0) && (-offset > framenum)) offset = - framenum;
 		if(param.verbose && offset != old_offset)
-			print_stat(fr,offset,ao,1);
+			print_stat(fr,offset,ao,1,&param);
 	} while (!intflag && stopped);
 
 	/* Make the seeking experience with buffer less annoying.
@@ -228,7 +236,7 @@ static void seekmode(mpg123_handle *mh, out123_handle *ao)
 		stopped = TRUE;
 		out123_pause(ao);
 		if(param.verbose)
-			print_stat(mh, 0, ao, 0);
+			print_stat(mh, 0, ao, 0, &param);
 		mpg123_getformat(mh, NULL, &channels, &encoding);
 		pcmframe = out123_encsize(encoding)*channels;
 		if(pcmframe > 0)
@@ -243,7 +251,7 @@ static void seekmode(mpg123_handle *mh, out123_handle *ao)
 			,	(off_p)mpg123_tell(mh));
 		fprintf(stderr, "%s", MPG123_STOPPED_STRING);
 		if(param.verbose)
-			print_stat(mh, 0, ao, 1);
+			print_stat(mh, 0, ao, 1, &param);
 	}
 }
 
@@ -267,10 +275,10 @@ static int get_key(int do_delay, char *val)
 	t.tv_usec=(do_delay) ? 10*1000 : 0;
 
 	FD_ZERO(&r);
-	FD_SET(0,&r);
+	FD_SET(STDIN_FILENO,&r);
 	if(select(1,&r,NULL,NULL,&t) > 0 && FD_ISSET(0,&r))
 	{
-		if(read(0,val,1) <= 0)
+		if(read(STDIN_FILENO,val,1) <= 0)
 		return 0; /* Well, we couldn't read the key, so there is none. */
 		else
 		return 1;
@@ -330,7 +338,7 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 		if(stopped)
 			stopped=0;
 		if(param.verbose)
-			print_stat(fr, 0, ao, 1);
+			print_stat(fr, 0, ao, 1, &param);
 		else
 			fprintf(stderr, "%s", (paused) ? MPG123_PAUSED_STRING : MPG123_EMPTY_STRING);
 	break;
@@ -352,7 +360,7 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 			/* No out123_continue(), that's triggered by out123_play(). */
 		}
 		if(param.verbose)
-			print_stat(fr, 0, ao, 1);
+			print_stat(fr, 0, ao, 1, &param);
 		else
 			fprintf(stderr, "%s", (stopped) ? MPG123_STOPPED_STRING : MPG123_EMPTY_STRING);
 	break;
@@ -386,6 +394,9 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 	case MPG123_VOL_DOWN_KEY:
 		mpg123_volume_change(fr, -0.02);
 	break;
+	case MPG123_VOL_MUTE_KEY:
+		set_mute(ao, muted=!muted);
+	break;
 	case MPG123_PITCH_UP_KEY:
 	case MPG123_PITCH_BUP_KEY:
 	case MPG123_PITCH_DOWN_KEY:
@@ -401,13 +412,13 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 			case MPG123_PITCH_BDOWN_KEY: new_pitch -= MPG123_PITCH_BVAL; break;
 			case MPG123_PITCH_ZERO_KEY:  new_pitch = 0.0; break;
 		}
+		if(param.verbose)
+			print_stat(fr,0,ao,0,&param);
 		set_pitch(fr, ao, new_pitch);
 		if(param.verbose > 1)
-		{
-			print_stat(fr,0,ao,0);
 			fprintf(stderr, "\nNew pitch: %f\n", param.pitch);
-			print_stat(fr,0,ao,1);
-		}
+		if(param.verbose)
+			print_stat(fr,0,ao,1,&param);
 	}
 	break;
 	case MPG123_VERBOSE_KEY:
@@ -424,7 +435,7 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 		mpg123_param(fr, MPG123_RVA, param.rva, 0);
 		mpg123_volume_change(fr, 0.);
 		if(param.verbose)
-			print_stat(fr,0,ao,1);
+			print_stat(fr,0,ao,1,&param);
 	break;
 	case MPG123_PREV_KEY:
 		out123_pause(ao);
@@ -439,21 +450,21 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 	break;
 	case MPG123_PLAYLIST_KEY:
 		if(param.verbose)
-			print_stat(fr,0,ao,0);
+			print_stat(fr,0,ao,0,&param);
 		fprintf(stderr, "%s\nPlaylist (\">\" indicates current track):\n", param.verbose ? "\n" : "");
 		print_playlist(stderr, 1);
 		fprintf(stderr, "\n");
 	break;
 	case MPG123_TAG_KEY:
 		if(param.verbose)
-			print_stat(fr,0,ao,0);
+			print_stat(fr,0,ao,0,&param);
 		fprintf(stderr, "%s\n", param.verbose ? "\n" : "");
-		print_id3_tag(fr, param.long_id3, stderr);
+		print_id3_tag(fr, param.long_id3, stderr, term_width(STDERR_FILENO));
 		fprintf(stderr, "\n");
 	break;
 	case MPG123_MPEG_KEY:
 		if(param.verbose)
-			print_stat(fr,0,ao,0);
+			print_stat(fr,0,ao,0,&param);
 		fprintf(stderr, "\n");
 		if(param.verbose > 1)
 			print_header(fr);
@@ -465,7 +476,7 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 	{ /* This is more than the one-liner before, but it's less spaghetti. */
 		int i;
 		if(param.verbose)
-			print_stat(fr,0,ao,0);
+			print_stat(fr,0,ao,0,&param);
 		fprintf(stderr,"\n\n -= terminal control keys =-\n");
 		for(i=0; i<(sizeof(term_help)/sizeof(struct keydef)); ++i)
 		{
@@ -480,7 +491,11 @@ static void term_handle_key(mpg123_handle *fr, out123_handle *ao, char val)
 	break;
 	case MPG123_FRAME_INDEX_KEY:
 	case MPG123_VARIOUS_INFO_KEY:
-		if(param.verbose) fprintf(stderr, "\n");
+		if(param.verbose)
+		{
+			print_stat(fr,0,ao,0,&param);
+			fprintf(stderr, "\n");
+		}
 		switch(val) /* because of tolower() ... */
 		{
 			case MPG123_FRAME_INDEX_KEY:
@@ -548,14 +563,16 @@ static void term_handle_input(mpg123_handle *fr, out123_handle *ao, int do_delay
 
 void term_exit(void)
 {
+	mdebug("term_enable=%i", term_enable);
 	const char cursor_restore[] = "\x1b[?25h";
 	/* Bring cursor back. */
-	if(term_have_fun(STDERR_FILENO))
-		write(STDERR_FILENO, cursor_restore, sizeof(cursor_restore));
+	if(term_have_fun(STDERR_FILENO, param.term_visual))
+		fprintf(stderr, "%s", cursor_restore);
 
 	if(!term_enable) return;
 
-	tcsetattr(0,TCSAFLUSH,&old_tio);
+	debug("reset attrbutes");
+	tcsetattr(term_fd,TCSAFLUSH,&old_tio);
 }
 
 #endif

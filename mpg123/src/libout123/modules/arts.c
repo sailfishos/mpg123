@@ -1,7 +1,7 @@
 /*
 	arts: audio output via aRts Sound Daemon
 
-	copyright 2007-8 by the mpg123 project - free software under the terms of the LGPL 2.1
+	copyright 2007-2020 by the mpg123 project - free software under the terms of the LGPL 2.1
 	see COPYING and AUTHORS files in distribution or http://mpg123.org
 
 	initially written by Stefan Lenselink (Stefan@lenselink.org)
@@ -67,7 +67,7 @@ static void flush_arts(out123_handle *ao)
   /* aRts doesn't have a flush statement! */
 }
 
-static int deinit_arts(out123_handle* ao)
+static void deinit_arts(out123_handle* ao)
 {
 	if(ao->userptr)
 	{
@@ -75,7 +75,6 @@ static int deinit_arts(out123_handle* ao)
 		ao->userptr = NULL;
 	}
 	arts_free();
-	return 0;
 }
 
 static int init_arts(out123_handle* ao)
@@ -85,7 +84,8 @@ static int init_arts(out123_handle* ao)
 	ao->userptr = malloc(sizeof(mpg123_arts_t));
 	if(ao->userptr == NULL)
 	{
-		error("Out of memory!");
+		if(!AOQUIET)
+			error("Out of memory!");
 		return -1;
 	}
 	/* clear it to have a consistent state */
