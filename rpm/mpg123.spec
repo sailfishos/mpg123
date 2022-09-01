@@ -1,5 +1,5 @@
 Name:           mpg123
-Version:        1.29.2
+Version:        1.30.2
 Release:        1
 Summary:        Console MPEG audio player and decoder library
 License:        LGPLv2
@@ -49,6 +49,7 @@ commonly MPEG 1.0 Layer 3 aka MP3).
     --with-cpu=aarch64 \
 %endif
 
+%make_build
 make %{?_smp_mflags}
 
 %install
