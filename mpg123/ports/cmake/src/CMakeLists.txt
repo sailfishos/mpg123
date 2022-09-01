@@ -8,15 +8,12 @@ include(CheckSymbolExists)
 include(CMakeDependentOption)
 include(TestBigEndian)
 
-check_include_file("arpa/inet.h" HAVE_ARPA_INET_H)
 check_include_file("dirent.h" HAVE_DIRENT_H)
 check_include_file("dlfcn.h" HAVE_DLFCN_H)
 check_include_file("inttypes.h" HAVE_INTTYPES_H)
 check_include_file("langinfo.h" HAVE_LANGINFO_H)
 check_include_file("limits.h" HAVE_LIMITS_H)
 check_include_file("locale.h" HAVE_LOCALE_H)
-check_include_file("netdb.h" HAVE_NETDB_H)
-check_include_file("netinet/in.h" HAVE_NETINET_IN_H)
 check_include_file("sched.h" HAVE_SCHED_H)
 check_include_file("signal.h" HAVE_SIGNAL_H)
 check_include_file("stdio.h" HAVE_STDIO_H)
@@ -25,7 +22,6 @@ check_include_file("stdlib.h" HAVE_STDLIB_H)
 check_include_file("string.h" HAVE_STRING_H)
 check_include_file("sys/ioctl.h" HAVE_SYS_IOCTL_H)
 check_include_file("sys/ipc.h" HAVE_SYS_IPC_H)
-check_include_file("sys/param.h" HAVE_SYS_PARAM_H)
 check_include_file("sys/resource.h" HAVE_SYS_RESOURCE_H)
 check_include_file("sys/select.h" HAVE_SYS_SELECT_H)
 check_include_file("sys/shm.h" HAVE_SYS_SHM_H)
@@ -38,7 +34,6 @@ check_include_file("sys/wait.h" HAVE_SYS_WAIT_H)
 check_include_file("termios.h" HAVE_TERMIOS)
 check_include_file("unistd.h" HAVE_UNISTD_H)
 check_include_file("windows.h" HAVE_WINDOWS_H)
-
 function(check_m)
     set(CMAKE_REQUIRED_LIBRARIES m)
     check_function_exists(sin HAVE_M)
@@ -58,6 +53,9 @@ check_function_exists(shmat HAVE_SHMAT)
 check_function_exists(shmdt HAVE_SHMDT)
 check_function_exists(shmctl HAVE_SHMCTL)
 check_function_exists(strerror HAVE_STRERROR)
+check_function_exists(fork HAVE_FORK)
+check_function_exists(execvp HAVE_EXECVP)
+check_function_exists(ctermid HAVE_CTERMID)
 
 search_libs(gethostbyname GETHOSTBYNAME_LIB nsl socket network)
 search_libs(socket SOCKET_LIB socket)
@@ -173,10 +171,6 @@ endif()
 
 if(WIN32)
     set(HAVE_MKFIFO ON)
-endif()
-
-if(HAVE_NETDB_H AND HAVE_SYS_PARAM_H AND HAVE_SYS_SOCKET_H AND HAVE_NETINET_IN_H AND HAVE_ARPA_INET_H)
-    set(HAVE_NETWORK ON)
 endif()
 
 if(NO_MESSAGES)
@@ -319,7 +313,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Werror -pedantic")
     endif()
 endif()
-cmake_dependent_option(NETWORK "network support (http streams / webradio)" ON "HAVE_NETWORK" OFF)
 option(NEWOLD_WRITE_SAMPLE "enable new/old WRITE_SAMPLE macro for non-accurate 16 bit output, faster on certain CPUs (default on on x86-32)" OFF)
 cmake_dependent_option(NO_BUFFER "enable audio buffer code (default uses system whitelist... proper checks later)" OFF "HAVE_MMAP OR HAVE_SYS_IPC_H AND HAVE_SYS_SHM_H AND HAVE_SHMGET AND HAVE_SHMAT AND HAVE_SHMDT AND HAVE_SHMCTL" ON)
 option(NO_DOWNSAMPLE "no downsampled decoding" OFF)
@@ -373,67 +366,86 @@ endif()
 add_subdirectory("libsyn123")
 
 if(UNIX)
-    add_subdirectory("tests")
+    option(BUILD_PROGRAMS "Build programs" ON)
 
-    if(BUILD_LIBOUT123)
-        add_executable(${PROJECT_NAME}
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/common.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/sysutil.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/control_generic.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/equalizer.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/httpget.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/resolver.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/genre.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/mpg123.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/metaprint.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/local.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/playlist.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/streamdump.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/term.c")
-        target_link_libraries(${PROJECT_NAME} PRIVATE
-            compat
-            lib${PROJECT_NAME}
-            libout123
-            libsyn123
-            ${GETHOSTBYNAME_LIB}
-            ${SOCKET_LIB}
-            $<$<BOOL:${HAVE_M}>:m>)
+    if(BUILD_PROGRAMS)
 
-        add_executable(out123
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/sysutil.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/filters.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/local.c"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/out123.c")
-        target_link_libraries(out123 PRIVATE
+        if(HAVE_FORK AND HAVE_EXECVP)
+            set(NET123 ON)
+            set(NET123_EXEC ON)
+        endif()
+
+        if(HAVE_TERMIOS)
+            set(TERM_POSIX ON)
+        else()
+            set(TERM_NONE ON)
+        endif()
+
+        add_subdirectory("tests")
+
+        if(BUILD_LIBOUT123)
+            add_executable(${PROJECT_NAME}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/common.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/sysutil.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/control_generic.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/equalizer.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/httpget.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/resolver.c"
+                $<$<BOOL:${NET123_EXEC}>:${CMAKE_CURRENT_SOURCE_DIR}/../../../src/net123_exec.c>
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/genre.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/mpg123.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/metaprint.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/local.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/playlist.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/streamdump.c"
+                $<$<BOOL:${TERM_POSIX}>:${CMAKE_CURRENT_SOURCE_DIR}/../../../src/term_posix.c>
+                $<$<BOOL:${TERM_NONE}>:${CMAKE_CURRENT_SOURCE_DIR}/../../../src/term_none.c>
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/term.c")
+            target_link_libraries(${PROJECT_NAME} PRIVATE
+                compat
+                lib${PROJECT_NAME}
+                libout123
+                libsyn123
+                ${GETHOSTBYNAME_LIB}
+                ${SOCKET_LIB}
+                $<$<BOOL:${HAVE_M}>:m>)
+
+            add_executable(out123
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/sysutil.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/filters.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/local.c"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/out123.c")
+            target_link_libraries(out123 PRIVATE
+                lib${PROJECT_NAME}
+                libout123
+                libsyn123)
+            install(TARGETS ${PROJECT_NAME} out123
+                EXPORT targets
+                ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
+                LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
+                RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}/")
+        endif()
+
+        add_executable(${PROJECT_NAME}-id3dump
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/mpg123-id3dump.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c")
+        target_link_libraries(${PROJECT_NAME}-id3dump  PRIVATE
+            lib${PROJECT_NAME})
+
+        add_executable(${PROJECT_NAME}-strip
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/mpg123-strip.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c")
+        target_link_libraries(${PROJECT_NAME}-strip  PRIVATE
             lib${PROJECT_NAME}
-            libout123
             libsyn123)
-        install(TARGETS ${PROJECT_NAME} out123
+
+        install(TARGETS ${PROJECT_NAME}-id3dump ${PROJECT_NAME}-strip
             EXPORT targets
             ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
             LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
             RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}/")
     endif()
-
-    add_executable(${PROJECT_NAME}-id3dump
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/mpg123-id3dump.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c")
-    target_link_libraries(${PROJECT_NAME}-id3dump  PRIVATE
-        lib${PROJECT_NAME})
-
-    add_executable(${PROJECT_NAME}-strip
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/mpg123-strip.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/getlopt.c")
-    target_link_libraries(${PROJECT_NAME}-strip  PRIVATE
-        lib${PROJECT_NAME}
-        libsyn123)
-
-    install(TARGETS ${PROJECT_NAME}-id3dump ${PROJECT_NAME}-strip
-        EXPORT targets
-        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
-        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
-        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}/")
 endif()
