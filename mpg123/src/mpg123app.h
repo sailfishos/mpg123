@@ -18,7 +18,7 @@
 /* import DLL symbols on windows */
 
 #include "httpget.h"
-#if WIN32
+#if _WIN32
 #include "win32_support.h"
 #endif
 
@@ -97,6 +97,7 @@ struct parameter
 	long resync_limit;
 	int smooth;
 	double pitch; /* <0 or >0, 0.05 for 5% speedup. */
+	double pauseloop; // terminal control 'pause' loop length
 	unsigned long appflags; /* various switches for mpg123 application */
 	char *proxyurl;
 	int keep_open; /* Whether to keep files open after end reached, for remote control mode, perhaps terminal control, too. */
