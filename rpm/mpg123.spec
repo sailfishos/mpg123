@@ -1,10 +1,10 @@
 Name:           mpg123
-Version:        1.31.3
+Version:        1.32.5
 Release:        1
 Summary:        Console MPEG audio player and decoder library
 License:        LGPLv2
 Url:            http://www.mpg123.de/
-Source0:        https://sourceforge.net/projects/%{name}/files/%{name}/%{version}/%{name}-%{version}.tar.bz2
+Source0:        %{name}-%{version}.tar.bz2
 BuildRequires:  pkgconfig(libpulse)
 
 %description
@@ -35,6 +35,7 @@ commonly MPEG 1.0 Layer 3 aka MP3).
 %configure \
     --enable-modules=yes \
     --with-module-suffix=.so \
+    --with-audio=dummy,pulse \
     --with-default-audio=pulse \
 %ifarch %{arm32}
     --with-cpu=arm_fpu \
@@ -68,7 +69,6 @@ commonly MPEG 1.0 Layer 3 aka MP3).
 %{_mandir}/man1/out123.1*
 %dir %{_libdir}/%{name}
 %{_libdir}/%{name}/output_dummy.so
-%{_libdir}/%{name}/output_oss.so
 %{_libdir}/%{name}/output_pulse.so
 
 %files -n libmpg123
