@@ -1,5 +1,5 @@
 Name:           mpg123
-Version:        1.32.5
+Version:        1.33.4
 Release:        1
 Summary:        Console MPEG audio player and decoder library
 License:        LGPLv2
@@ -59,7 +59,6 @@ commonly MPEG 1.0 Layer 3 aka MP3).
 %postun -n libmpg123 -p /sbin/ldconfig
 
 %files
-%defattr(-,root,root)
 %doc ChangeLog README
 %{_bindir}/mpg123
 %{_bindir}/mpg123-id3dump
@@ -72,14 +71,12 @@ commonly MPEG 1.0 Layer 3 aka MP3).
 %{_libdir}/%{name}/output_pulse.so
 
 %files -n libmpg123
-%defattr(-,root,root)
 %license COPYING
 %{_libdir}/libmpg123.so.*
 %{_libdir}/libout123.so.*
 %{_libdir}/libsyn123.so.*
 
 %files devel
-%defattr(-,root,root)
 %{_libdir}/libmpg123.so
 %{_libdir}/libout123.so
 %{_libdir}/libsyn123.so
